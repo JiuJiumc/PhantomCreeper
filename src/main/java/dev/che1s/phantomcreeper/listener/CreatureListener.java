@@ -5,6 +5,7 @@ import dev.che1s.phantomcreeper.mob.PhantomCreeperController;
 import dev.che1s.phantomcreeper.mob.PhantomCreeperManager;
 import dev.che1s.phantomcreeper.stats.StatsService;
 import org.bukkit.Material;
+import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -86,6 +87,12 @@ public final class CreatureListener implements Listener {
         if (manager.isManaged(event.getEntity())) {
             event.setCancelled(true);
         }
+    }
+
+    @EventHandler
+    public void onRemoved(EntityRemoveFromWorldEvent event) {
+        PhantomCreeperController controller = manager.controller(event.getEntity());
+        if (controller != null) controller.onRemoved();
     }
 
     @EventHandler

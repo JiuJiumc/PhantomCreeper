@@ -8,7 +8,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class PlatformScheduler {
     private static final boolean FOLIA = classExists("io.papermc.paper.threadedregions.RegionizedServer");
@@ -91,11 +90,14 @@ public final class PlatformScheduler {
     }
 
     public static TaskHandle runOnEntity(JavaPlugin plugin, Entity entity, Runnable runnable) {
+        return runOnEntity(plugin, entity, runnable, () -> {});
+    }
+
+    public static TaskHandle runOnEntity(JavaPlugin plugin, Entity entity, Runnable runnable, Runnable retired) {
         if (FOLIA) {
-            AtomicReference<ScheduledTask> reference = new AtomicReference<>();
-            reference.set(entity.getScheduler().run(plugin, ignored -> runnable.run(), () -> {
-            }));
-            return () -> cancel(reference.get());
+            ScheduledTask scheduled = entity.getScheduler().run(plugin, ignored -> runnable.run(), retired);
+            if (scheduled == null) retired.run();
+            return foliaHandle(scheduled);
         }
         BukkitTask task = Bukkit.getScheduler().runTask(plugin, runnable);
         return task::cancel;
@@ -107,19 +109,21 @@ public final class PlatformScheduler {
             long initialDelayTicks,
             long periodTicks,
             Runnable runnable) {
+        return timerOnEntity(plugin, entity, initialDelayTicks, periodTicks, runnable, () -> {});
+    }
+
+    public static TaskHandle timerOnEntity(
+            JavaPlugin plugin, Entity entity, long initialDelayTicks, long periodTicks,
+            Runnable runnable, Runnable retired) {
         if (FOLIA) {
             ScheduledTask task = entity.getScheduler().runAtFixedRate(
                     plugin,
-                    ignored -> {
-                        if (entity.isValid()) {
-                            runnable.run();
-                        }
-                    },
-                    () -> {
-                    },
+                    ignored -> runnable.run(),
+                    retired,
                     Math.max(1L, initialDelayTicks),
                     Math.max(1L, periodTicks)
             );
+            if (task == null) retired.run();
             return foliaHandle(task);
         }
         BukkitTask task = Bukkit.getScheduler().runTaskTimer(
@@ -143,10 +147,14 @@ public final class PlatformScheduler {
         return () -> cancel(task);
     }
 
-    private static void cancel(ScheduledTask task) {
-        if (task != null && task.getExecutionState() == ScheduledTask.ExecutionState.RUNNING) {
+    static void cancel(ScheduledTask task) {
+        if (task != null) {
             task.cancel();
         }
+    }
+
+    public static boolean owns(Entity entity) {
+        return FOLIA ? Bukkit.isOwnedByCurrentRegion(entity) : Bukkit.isPrimaryThread();
     }
 
     private static boolean classExists(String className) {

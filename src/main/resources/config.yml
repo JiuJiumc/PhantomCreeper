@@ -36,6 +36,8 @@ model:
   keep-base-phantom-visible-if-model-fails: true
 
 targeting:
+  # 无目标时重新搜敌的间隔，单位 tick，范围1～100；20 tick为1秒。
+  search-interval-ticks: 10
   # 生物开始追踪玩家的最大距离。
   # Maximum distance at which the creature starts tracking a player.
   acquire-range: 48.0
@@ -53,6 +55,8 @@ targeting:
   require-line-of-sight: false
 
 movement:
+  # 群体避让计算间隔，单位 tick，范围1～100；降低频率可减少大量生物时的开销。
+  separation-interval-ticks: 5
   # 远距离巡航速度，单位为格/tick；0.32 约为每秒 6.4 格。
   # Long-range cruise speed in blocks per tick; 0.32 is about 6.4 blocks per second.
   cruise-speed: 0.32

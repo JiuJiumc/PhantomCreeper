@@ -36,8 +36,10 @@ public final class PhantomCreeperManager {
     private final Map<UUID, PhantomCreeperController> active = new ConcurrentHashMap<>();
     private final Map<UUID, Long> recentExplosionVictims = new ConcurrentHashMap<>();
     private final SpawnQuota spawnQuota = new SpawnQuota();
+    private final PlayerSnapshots playerSnapshots;
     private final ThreadLocal<ExplosionContext> explosionContext = new ThreadLocal<>();
     private final PlatformScheduler.TaskHandle explosionCleanupTask;
+    private volatile boolean stopped;
 
     public PhantomCreeperManager(
             JavaPlugin plugin,
@@ -49,6 +51,7 @@ public final class PhantomCreeperManager {
         this.language = language;
         this.model = model;
         this.markerKey = new NamespacedKey(plugin, "phantom_creeper");
+        this.playerSnapshots = new PlayerSnapshots(plugin, () -> !active.isEmpty());
         this.explosionCleanupTask = PlatformScheduler.globalTimer(
                 plugin,
                 20L,
@@ -68,7 +71,7 @@ public final class PhantomCreeperManager {
             UUID preferredTarget,
             SpawnSource source) {
         World world = location.getWorld();
-        if (world == null
+        if (stopped || world == null
                 || !world.isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) {
             return null;
         }
@@ -83,9 +86,10 @@ public final class PhantomCreeperManager {
         Creeper carrier = null;
         try {
             carrier = world.spawn(location, Creeper.class, entity -> {
-                // 控制器在载体所属的区域线程中更新位置；关闭原版寻路，
-                // 避免它覆盖插件计算出的飞行轨迹。
-                entity.setAI(false);
+                // NoAI会使26.2跳过LivingEntity的速度位移积分。
+                // 保留物理移动，仅关闭自主感知/目标AI，飞行由实体调度器控制。
+                entity.setAI(true);
+                entity.setAware(false);
                 entity.setGravity(false);
                 entity.setCollidable(false);
                 entity.setPersistent(false);
@@ -102,6 +106,7 @@ public final class PhantomCreeperManager {
                 entity.addScoreboardTag("phantomcreeper");
                 entity.setTarget(null);
                 entity.setIgnited(false);
+                entity.setFuseTicks(0);
                 if (!current.model().fallbackVisible() && !model.isLoaded()) {
                     entity.setInvisible(true);
                 }
@@ -118,7 +123,12 @@ public final class PhantomCreeperManager {
             PhantomCreeperController controller = new PhantomCreeperController(
                     plugin, this, carrier, settings, model, preferredTarget, source);
             active.put(carrier.getUniqueId(), controller);
+            if (stopped) {
+                controller.removeWithModel();
+                return null;
+            }
             controller.start();
+            if (controller.isClosing()) return null;
             if (model.isLoaded()) {
                 controller.attachModel();
             }
@@ -156,6 +166,8 @@ public final class PhantomCreeperManager {
         return active.size();
     }
 
+    PlayerSnapshots playerSnapshots() { return playerSnapshots; }
+
     public int naturalCount() {
         return Math.min(spawnQuota.naturalReservations(), active.size());
     }
@@ -184,26 +196,32 @@ public final class PhantomCreeperManager {
 
     public Vector separationVector(PhantomCreeperController source, double radius) {
         Vector result = new Vector();
-        Location sourceLocation = source.cachedLocation();
+        PhantomCreeperController.Position sourceLocation = source.cachedPosition();
         double radiusSquared = radius * radius;
         for (PhantomCreeperController other : active.values()) {
             if (other == source || !other.sharesWorld(source)) {
                 continue;
             }
-            Location otherLocation = other.cachedLocation();
-            Vector away = sourceLocation.toVector().subtract(otherLocation.toVector());
-            double distanceSquared = away.lengthSquared();
+            PhantomCreeperController.Position otherLocation = other.cachedPosition();
+            double x = sourceLocation.x() - otherLocation.x();
+            double y = sourceLocation.y() - otherLocation.y();
+            double z = sourceLocation.z() - otherLocation.z();
+            double distanceSquared = x*x + y*y + z*z;
             if (distanceSquared >= radiusSquared) {
                 continue;
             }
             if (distanceSquared < 1.0E-6) {
-                double angle = source.entity().getUniqueId().hashCode() * 0.017453292519943295;
-                away = new Vector(Math.cos(angle), 0.0, Math.sin(angle));
+                double angle = source.entityId().hashCode() * 0.017453292519943295;
+                x = Math.cos(angle); y = 0; z = Math.sin(angle);
             } else {
-                away.normalize();
+                double inverse = 1.0 / Math.sqrt(distanceSquared);
+                x *= inverse; y *= inverse; z *= inverse;
             }
             double distance = Math.sqrt(Math.max(distanceSquared, 0.0));
-            result.add(away.multiply((radius - distance) / radius));
+            double weight = (radius - distance) / radius;
+            result.setX(result.getX() + x * weight);
+            result.setY(result.getY() + y * weight);
+            result.setZ(result.getZ() + z * weight);
         }
         return result;
     }
@@ -256,7 +274,7 @@ public final class PhantomCreeperManager {
     }
 
     public void forget(PhantomCreeperController controller) {
-        if (active.remove(controller.entity().getUniqueId(), controller)) {
+        if (active.remove(controller.entityId(), controller)) {
             spawnQuota.release(controller.spawnSource());
         }
     }
@@ -288,9 +306,18 @@ public final class PhantomCreeperManager {
     }
 
     public void shutdown() {
+        stopped = true;
+        playerSnapshots.close();
         explosionCleanupTask.cancel();
         for (PhantomCreeperController controller : active.values()) {
-            controller.closeModel();
+            controller.stopTask();
+            if (PlatformScheduler.owns(controller.entity())) {
+                controller.removeWithModel();
+            } else {
+                // 停用时不能再向已禁用插件注册实体任务，更不能跨 Region 销毁载体。
+                // Folia 安装/卸载需完整重启；正常 /phantomcreeper reload 不走此分支。
+                plugin.getLogger().warning("Folia 停用：跨区域载体请通过完整重启清理，不支持热卸载。");
+            }
         }
         active.clear();
         spawnQuota.reset();

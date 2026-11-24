@@ -82,6 +82,8 @@ final class ModelEngineBackend implements ModelBackend, Listener {
 
     @Override
     public ModelAttachment attach(LivingEntity entity) {
+        ModeledEntity modeled = null;
+        ActiveModel active = null;
         try {
             ModelBlueprint blueprint = ModelEngineAPI.getBlueprint(settings.get().model().name());
             if (blueprint == null) {
@@ -93,11 +95,11 @@ final class ModelEngineBackend implements ModelBackend, Listener {
             Dummy<LivingEntity> dummy = new ModelEngineAttachment.CarrierDummy(entity);
             dummy.setDetectingPlayers(true);
             dummy.setVisible(false);
-            ModeledEntity modeled = ModelEngineAPI.createModeledEntity(dummy);
+            modeled = ModelEngineAPI.createModeledEntity(dummy);
             // ModelEngine 的距离 LOD 会降低远距离位置同步频率，表现为飞行几秒后
             // 周期性左右卡顿。幻翼苦力怕数量有限，这里仅对本模型的移动关闭 LOD。
             modeled.getAnimationLodHandler().setEnabled(false);
-            ActiveModel active = modeled.getModel(blueprint.getName()).orElse(null);
+            active = modeled.getModel(blueprint.getName()).orElse(null);
             if (active == null) {
                 active = ModelEngineAPI.createActiveModel(blueprint);
                 active.setScale(configured.scale());
@@ -107,7 +109,7 @@ final class ModelEngineBackend implements ModelBackend, Listener {
                     try {
                         ModelEngineReflection.addModelWithoutEvent(modeled, active);
                     } catch (ReflectiveOperationException | RuntimeException exception) {
-                        active.destroy();
+                        ModelEngineAttachment.destroy(modeled, active);
                         logAttachFailure(String.valueOf(exception.getMessage()));
                         return null;
                     }
@@ -126,6 +128,14 @@ final class ModelEngineBackend implements ModelBackend, Listener {
             ModelEngineReflection.startAnimation(active, configured.flapAnimation(), true);
             return new ModelEngineAttachment(modeled, active, dummy);
         } catch (RuntimeException exception) {
+            if (modeled != null) {
+                try {
+                    if (active != null) ModelEngineAttachment.destroy(modeled, active);
+                    else modeled.destroy();
+                } catch (RuntimeException cleanupFailure) {
+                    exception.addSuppressed(cleanupFailure);
+                }
+            }
             logAttachFailure(String.valueOf(exception.getMessage()));
             return null;
         }

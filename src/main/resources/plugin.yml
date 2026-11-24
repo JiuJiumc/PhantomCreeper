@@ -10,6 +10,7 @@ softdepend:
   - BetterModel
   - ModelEngine
   - PlaceholderAPI
+  - StarryHuanYi
 libraries:
   - "org.xerial:sqlite-jdbc:${sqlite.version}"
 

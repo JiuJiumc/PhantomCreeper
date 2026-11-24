@@ -8,7 +8,6 @@ import dev.che1s.phantomcreeper.util.MovementMath;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Creeper;
-import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.Locale;
@@ -26,6 +25,7 @@ public final class PhantomCreeperController {
     private final JavaPlugin plugin;
     private final PhantomCreeperManager manager;
     private final Creeper entity;
+    private final UUID entityId;
     private final Supplier<PluginSettings> settings;
     private final PhantomModel model;
     private final PhantomCreeperManager.SpawnSource spawnSource;
@@ -41,7 +41,8 @@ public final class PhantomCreeperController {
     private PlatformScheduler.TaskHandle tickTask;
     private ModelAttachment modelAttachment;
     private State state = State.HOVER;
-    private UUID targetId;
+    private volatile UUID targetId;
+    private int nextSearchTick;
     private int ageTicks;
     private int modelRetryTicks;
     private volatile double trackedX;
@@ -50,6 +51,12 @@ public final class PhantomCreeperController {
     private volatile int trackedHitboxes;
     private volatile double trackedHealth;
     private volatile double trackedMaxHealth;
+    private volatile double observedMovement;
+    private volatile Position cachedPosition;
+
+    record Position(double x, double y, double z) {}
+
+    Position cachedPosition() { return cachedPosition; }
 
     PhantomCreeperController(
             JavaPlugin plugin,
@@ -62,6 +69,7 @@ public final class PhantomCreeperController {
         this.plugin = plugin;
         this.manager = manager;
         this.entity = entity;
+        this.entityId = entity.getUniqueId();
         this.settings = settings;
         this.model = model;
         this.spawnSource = spawnSource;
@@ -71,8 +79,9 @@ public final class PhantomCreeperController {
         this.trackedX = entity.getLocation().getX();
         this.trackedY = entity.getLocation().getY();
         this.trackedZ = entity.getLocation().getZ();
+        this.cachedPosition = new Position(trackedX, trackedY, trackedZ);
         this.targetId = preferredTarget;
-        this.targetSelector = new TargetSelector(entity);
+        this.targetSelector = new TargetSelector(entity, manager.playerSnapshots());
         this.flightController = new FlightController(
                 this,
                 manager,
@@ -83,11 +92,30 @@ public final class PhantomCreeperController {
     }
 
     public void start() {
-        tickTask = PlatformScheduler.timerOnEntity(plugin, entity, 1L, 1L, this::tick);
+        tickTask = PlatformScheduler.timerOnEntity(plugin, entity, 1L, 1L, this::tick, this::retired);
     }
 
     public Creeper entity() {
         return entity;
+    }
+
+    UUID entityId() { return entityId; }
+    boolean isClosing() { return closing.get(); }
+
+    /** 退役回调只操作本地引用和名额，不在此访问世界或实体。 */
+    private void retired() {
+        if (closing.compareAndSet(false, true)) {
+            manager.forget(this);
+        }
+    }
+
+    /** 由实体移除事件在拥有实体的上下文中调用，不重复移除载体。 */
+    public void onRemoved() {
+        if (closing.compareAndSet(false, true)) {
+            cancelTask();
+            closeModel();
+            manager.forget(this);
+        }
     }
 
     public PhantomCreeperManager.SpawnSource spawnSource() {
@@ -103,7 +131,8 @@ public final class PhantomCreeperController {
     }
 
     public String velocityStatus() {
-        return String.format(Locale.ROOT, "%.2f", flightController.trackedSpeed());
+        // 实体连续两次真实坐标的位移（格/tick），不是施加速度的计算值。
+        return String.format(Locale.ROOT, "%.2f", observedMovement);
     }
 
     public String healthStatus() {
@@ -178,10 +207,16 @@ public final class PhantomCreeperController {
     public void closeModel() {
         ModelAttachment current = modelAttachment;
         modelAttachment = null;
-        if (current != null && current.isValid()) {
-            current.close();
+        if (current != null) {
+            try {
+                current.close();
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "模型关闭失败：" + entityId, exception);
+            }
         }
     }
+
+    void stopTask() { cancelTask(); }
 
     public void reattachModel() {
         if (closing.get() || !entity.isValid()) {
@@ -193,16 +228,25 @@ public final class PhantomCreeperController {
 
     @SuppressWarnings("deprecation")
     private void tick() {
-        if (closing.get() || !entity.isValid()) {
+        if (closing.get()) {
             cancelTask();
+            return;
+        }
+        if (!entity.isValid()) {
+            onRemoved();
             return;
         }
         PluginSettings current = settings.get();
         ageTicks++;
         Location observed = entity.getLocation();
+        double dx = observed.getX() - trackedX;
+        double dy = observed.getY() - trackedY;
+        double dz = observed.getZ() - trackedZ;
+        observedMovement = Math.sqrt(dx * dx + dy * dy + dz * dz);
         trackedX = observed.getX();
         trackedY = observed.getY();
         trackedZ = observed.getZ();
+        cachedPosition = new Position(trackedX, trackedY, trackedZ);
         trackedHealth = entity.getHealth();
         trackedMaxHealth = entity.getMaxHealth();
         trackedHitboxes = modelAttachment == null || !modelAttachment.isValid()
@@ -217,6 +261,8 @@ public final class PhantomCreeperController {
         if (entity.isIgnited()) {
             entity.setIgnited(false);
         }
+        // 插件自有FuseController负责计时和爆炸；不让原版引信独立累积。
+        entity.setFuseTicks(0);
         if (current.safety().despawnAfterTicks() > 0
                 && ageTicks >= current.safety().despawnAfterTicks()) {
             removeWithModel();
@@ -234,13 +280,14 @@ public final class PhantomCreeperController {
             soundController.tickFlight(entity.getWorld(), entity.getLocation());
         }
 
-        Player target = targetSelector.resolve(targetId, current);
+        TargetSnapshot target = targetSelector.resolve(targetId, current);
         if (target == null) {
             targetId = null;
         }
-        if (state != State.FUSE && target == null) {
+        if (state != State.FUSE && target == null && ageTicks >= nextSearchTick) {
+            nextSearchTick = ageTicks + current.targeting().searchIntervalTicks();
             target = targetSelector.find(current);
-            targetId = target == null ? null : target.getUniqueId();
+            targetId = target == null ? null : target.id();
         }
         if (state == State.FUSE) {
             if (target == null || !withinFuseCancelRange(target, current)) {
@@ -263,27 +310,26 @@ public final class PhantomCreeperController {
         }
     }
 
-    private boolean isTriggered(Player target, double radius) {
+    private boolean isTriggered(TargetSnapshot target, double radius) {
         Location at = entity.getLocation();
-        Location other = target.getLocation();
         return MovementMath.withinTrigger(
-                at.getX() - other.getX(),
-                at.getY() + 1.0 - (other.getY() + 1.0),
-                at.getZ() - other.getZ(),
+                at.getX() - target.x(),
+                at.getY() - target.y(),
+                at.getZ() - target.z(),
                 radius
         );
     }
 
-    private void beginFuse(PluginSettings current, Player target) {
+    private void beginFuse(PluginSettings current, TargetSnapshot target) {
         state = State.FUSE;
-        targetId = target.getUniqueId();
+        targetId = target.id();
         fuseController.start(target, current.combat().fuseTicks());
         flightController.faceTarget(target);
         flightController.stop();
         soundController.playPrimed(entity.getWorld(), entity.getLocation());
     }
 
-    private void tickFuse(Player target, PluginSettings current) {
+    private void tickFuse(TargetSnapshot target, PluginSettings current) {
         flightController.stop();
         if (target != null) {
             flightController.faceTarget(target);
@@ -293,13 +339,14 @@ public final class PhantomCreeperController {
         }
     }
 
-    private boolean withinFuseCancelRange(Player target, PluginSettings current) {
+    private boolean withinFuseCancelRange(TargetSnapshot target, PluginSettings current) {
         double cancelRadius = current.combat().fuseCancelRadius();
-        return entity.getLocation().distanceSquared(target.getLocation())
-                <= cancelRadius * cancelRadius;
+        Location at = entity.getLocation();
+        double x = at.getX() - target.x(), y = at.getY() - target.y(), z = at.getZ() - target.z();
+        return x*x + y*y + z*z <= cancelRadius * cancelRadius;
     }
 
-    private void cancelFuse(Player target) {
+    private void cancelFuse(TargetSnapshot target) {
         fuseController.cancel();
         flightController.stop();
         if (target == null) {
@@ -307,7 +354,7 @@ public final class PhantomCreeperController {
             targetId = null;
         } else {
             state = State.APPROACH;
-            targetId = target.getUniqueId();
+            targetId = target.id();
         }
     }
 

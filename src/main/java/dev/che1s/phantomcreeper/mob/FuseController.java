@@ -1,6 +1,5 @@
 package dev.che1s.phantomcreeper.mob;
 
-import org.bukkit.entity.Player;
 
 import java.util.UUID;
 
@@ -19,8 +18,8 @@ final class FuseController {
         return targetId;
     }
 
-    void start(Player target, int configuredTicks) {
-        targetId = target.getUniqueId();
+    void start(TargetSnapshot target, int configuredTicks) {
+        targetId = target.id();
         remainingTicks = Math.max(1, configuredTicks);
     }
 

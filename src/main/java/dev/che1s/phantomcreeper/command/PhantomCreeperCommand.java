@@ -94,11 +94,14 @@ public final class PhantomCreeperCommand implements CommandExecutor, TabComplete
         }
 
         if (target != null) {
-            Location origin = target.getLocation().clone();
-            spawn = origin.clone()
-                    .add(origin.getDirection().multiply(12.0))
-                    .add(0.0, 6.0, 0.0);
-            preferredTarget = target.getUniqueId();
+            Player chosen = target;
+            PlatformScheduler.runOnEntity(plugin, chosen, () -> {
+                if (!chosen.isOnline()) return;
+                Location origin = chosen.getLocation();
+                Location at = origin.clone().add(origin.getDirection().multiply(12.0)).add(0.0, 6.0, 0.0);
+                spawnAt(sender, at, chosen.getUniqueId());
+            }, () -> reply(sender, "command.spawn-failed"));
+            return true;
         } else {
             if (Bukkit.getWorlds().isEmpty()) {
                 language.send(sender, "command.spawn-failed", Map.of());
@@ -109,33 +112,45 @@ public final class PhantomCreeperCommand implements CommandExecutor, TabComplete
             preferredTarget = null;
         }
 
-        Location scheduleAt = target == null ? spawn : target.getLocation();
+        spawnAt(sender, spawn, preferredTarget);
+        return true;
+    }
+
+    private void reply(CommandSender sender, String key) {
+        if (!plugin.isEnabled()) return;
+        if (sender instanceof Player player && !PlatformScheduler.owns(player)) {
+            PlatformScheduler.runOnEntity(plugin, player, () -> {
+                if (player.isOnline()) language.send(player, key, Map.of());
+            });
+        } else {
+            language.send(sender, key, Map.of());
+        }
+    }
+
+    private void spawnAt(CommandSender sender, Location spawn, UUID preferredTarget) {
         Location finalSpawn = spawn;
         UUID finalTarget = preferredTarget;
         World world = finalSpawn.getWorld();
         if (world == null) {
-            language.send(sender, "command.spawn-failed", Map.of());
-            return true;
+            reply(sender, "command.spawn-failed");
+            return;
         }
         int chunkX = finalSpawn.getBlockX() >> 4;
         int chunkZ = finalSpawn.getBlockZ() >> 4;
         world.getChunkAtAsync(chunkX, chunkZ).thenAccept(ignored -> {
+            if (!plugin.isEnabled()) return;
             PlatformScheduler.runAtLocation(plugin, finalSpawn, () -> {
+                if (!plugin.isEnabled()) return;
                 if (manager.spawnNow(finalSpawn, finalTarget) == null) {
-                    language.send(sender, "command.spawn-failed", Map.of());
+                    reply(sender, "command.spawn-failed");
                 } else {
-                    language.send(sender, "command.spawn-success", Map.of());
+                    reply(sender, "command.spawn-success");
                 }
             });
         }).exceptionally(exception -> {
-            PlatformScheduler.runAtLocation(plugin, scheduleAt, () -> language.send(
-                    sender,
-                    "command.spawn-failed",
-                    Map.of()
-            ));
+            reply(sender, "command.spawn-failed");
             return null;
         });
-        return true;
     }
 
     private boolean removeAll(CommandSender sender) {

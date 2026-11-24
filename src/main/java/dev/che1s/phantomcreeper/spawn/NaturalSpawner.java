@@ -147,7 +147,9 @@ public final class NaturalSpawner {
         if (!spawn.enabled()) {
             return;
         }
-        int count = Math.max(1, requestedCount);
+        int count = Math.min(Math.max(1, requestedCount),
+                Math.min(Math.max(0, spawn.maxTracked() - manager.size()),
+                        Math.max(0, spawn.maxActive() - manager.naturalCount())));
         double baseAngle = ThreadLocalRandom.current().nextDouble(Math.PI * 2.0);
         for (int index = 0; index < count; index++) {
             if (manager.size() >= Math.max(1, spawn.maxTracked())) {

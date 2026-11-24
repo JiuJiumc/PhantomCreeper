@@ -6,7 +6,7 @@
 
     <groupId>dev.che1s</groupId>
     <artifactId>PhantomCreeper</artifactId>
-    <version>1.0.5</version>
+    <version>1.0.5-jiujiu.3</version>
     <packaging>jar</packaging>
 
     <name>PhantomCreeper</name>
@@ -39,6 +39,14 @@
     </repositories>
 
     <dependencies>
+        <!-- 只包含公开接口的编译依赖；由 StarryHuanYi 在运行时提供，不打入成品。 -->
+        <dependency>
+            <groupId>cn.starryhuanyi</groupId>
+            <artifactId>StarryHuanYi-api</artifactId>
+            <version>1.0.1-jiujiu.1</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/compile-deps/StarryHuanYi-api.jar</systemPath>
+        </dependency>
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
@@ -93,10 +101,16 @@
             <version>2.3</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.21.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
-        <finalName>PhantomCreeper-${project.version}</finalName>
+        <finalName>PhantomCreeper-1.0.5</finalName>
         <resources>
             <resource>
                 <directory>src/main/resources</directory>

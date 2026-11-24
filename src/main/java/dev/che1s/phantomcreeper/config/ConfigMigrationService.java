@@ -14,6 +14,14 @@ final class ConfigMigrationService {
 
     static boolean migrate(FileConfiguration config) {
         boolean changed = false;
+        if (setIfMissing(config, "targeting.search-interval-ticks", 10)) {
+            config.setComments("targeting.search-interval-ticks", List.of("无目标时搜敌间隔，单位tick，范围1～100；20tick为1秒。"));
+            changed = true;
+        }
+        if (setIfMissing(config, "movement.separation-interval-ticks", 5)) {
+            config.setComments("movement.separation-interval-ticks", List.of("群体避让计算间隔，单位tick，范围1～100；较大值可降低计算开销。"));
+            changed = true;
+        }
         changed |= setIfMissing(config, "movement.minimum-separation", 6.0);
         changed |= setIfMissing(config, "combat.fuse-cancel-radius", 7.0);
         changed |= setIfMissing(config, "model.engine", "auto");

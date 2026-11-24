@@ -56,7 +56,8 @@ final class ConfigSettingsReader {
                         loseRange,
                         config.getBoolean("targeting.ignore-creative", true),
                         config.getBoolean("targeting.ignore-spectator", true),
-                        config.getBoolean("targeting.require-line-of-sight", false)
+                        config.getBoolean("targeting.require-line-of-sight", false),
+                        boundedInterval(config.getInt("targeting.search-interval-ticks", 10))
                 ),
                 new PluginSettings.Movement(
                         cruiseSpeed,
@@ -68,7 +69,8 @@ final class ConfigSettingsReader {
                         positive(config.getDouble("movement.close-range", 8.0), 8.0),
                         positive(config.getDouble("movement.waypoint-radius", 3.5), 3.5),
                         positive(config.getDouble("movement.max-distance-from-home", 72.0), 72.0),
-                        positive(config.getDouble("movement.minimum-separation", 6.0), 6.0)
+                        positive(config.getDouble("movement.minimum-separation", 6.0), 6.0),
+                        boundedInterval(config.getInt("movement.separation-interval-ticks", 5))
                 ),
                 new PluginSettings.Combat(
                         positive(config.getDouble("combat.max-health", 24.0), 24.0),
@@ -186,5 +188,9 @@ final class ConfigSettingsReader {
 
     private static double fraction(double value, double fallback) {
         return Double.isFinite(value) ? Math.max(0.0, Math.min(1.0, value)) : fallback;
+    }
+
+    private static int boundedInterval(int value) {
+        return Math.max(1, Math.min(100, value));
     }
 }

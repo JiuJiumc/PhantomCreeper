@@ -43,7 +43,8 @@ public record PluginSettings(
             double loseRange,
             boolean ignoreCreative,
             boolean ignoreSpectator,
-            boolean requireLineOfSight
+            boolean requireLineOfSight,
+            int searchIntervalTicks
     ) {
     }
 
@@ -57,7 +58,8 @@ public record PluginSettings(
             double closeRange,
             double waypointRadius,
             double maxDistanceFromHome,
-            double minimumSeparation
+            double minimumSeparation,
+            int separationIntervalTicks
     ) {
     }
 

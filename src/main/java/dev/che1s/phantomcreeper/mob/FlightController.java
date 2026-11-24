@@ -2,11 +2,9 @@ package dev.che1s.phantomcreeper.mob;
 
 import dev.che1s.phantomcreeper.config.PluginSettings;
 import dev.che1s.phantomcreeper.model.ModelAttachment;
-import dev.che1s.phantomcreeper.scheduler.PlatformScheduler;
 import dev.che1s.phantomcreeper.util.MovementMath;
 import org.bukkit.Location;
 import org.bukkit.entity.Creeper;
-import org.bukkit.entity.Player;
 import org.bukkit.util.Vector;
 
 import java.util.function.Supplier;
@@ -23,7 +21,8 @@ final class FlightController {
 
     private double orbitAngle = Math.random() * Math.PI * 2.0;
     private Vector flightVelocity = new Vector();
-    private volatile double trackedSpeed;
+    private Vector cachedSeparation = new Vector();
+    private int nextSeparationTick;
 
     FlightController(
             PhantomCreeperController owner,
@@ -38,13 +37,9 @@ final class FlightController {
         this.home = home;
     }
 
-    double trackedSpeed() {
-        return trackedSpeed;
-    }
-
-    void approach(Player target, PluginSettings current, int ageTicks) {
+    void approach(TargetSnapshot target, PluginSettings current, int ageTicks) {
         Location location = entity.getLocation();
-        Location targetLocation = target.getLocation();
+        Location targetLocation = new Location(entity.getWorld(), target.x(), target.y(), target.z());
         double horizontalDistance = Math.hypot(
                 location.getX() - targetLocation.getX(),
                 location.getZ() - targetLocation.getZ()
@@ -64,7 +59,7 @@ final class FlightController {
                     targetLocation.getX() - location.getX()
             ).multiply(0.18));
         }
-        applySeparation(toTarget, current.movement().minimumSeparation());
+        applySeparation(toTarget, current, ageTicks);
         toTarget.setY(toTarget.getY() + Math.sin(ageTicks * 0.09) * 0.035);
         double configuredSpeed = close
                 ? current.movement().chaseSpeed()
@@ -91,7 +86,7 @@ final class FlightController {
                 Math.sin(orbitAngle) * radius
         );
         Vector toWaypoint = waypoint.toVector().subtract(location.toVector());
-        applySeparation(toWaypoint, current.movement().minimumSeparation());
+        applySeparation(toWaypoint, current, ageTicks);
         fly(
                 toWaypoint,
                 Math.min(current.movement().cruiseSpeed(), current.movement().maxSpeed()),
@@ -100,9 +95,9 @@ final class FlightController {
         keepPatrolHeadNatural();
     }
 
-    void faceTarget(Player target) {
+    void faceTarget(TargetSnapshot target) {
         Location location = entity.getLocation();
-        Vector direction = target.getEyeLocation().toVector()
+        Vector direction = new Vector(target.x(), target.y() + target.eyeHeight(), target.z())
                 .subtract(entity.getEyeLocation().toVector());
         if (direction.lengthSquared() < 1.0E-5) {
             return;
@@ -130,8 +125,12 @@ final class FlightController {
         }
     }
 
-    private void applySeparation(Vector steeringTarget, double radius) {
-        Vector separation = manager.separationVector(owner, radius);
+    private void applySeparation(Vector steeringTarget, PluginSettings current, int ageTicks) {
+        if (ageTicks >= nextSeparationTick) {
+            cachedSeparation = manager.separationVector(owner, current.movement().minimumSeparation());
+            nextSeparationTick = ageTicks + current.movement().separationIntervalTicks();
+        }
+        Vector separation = cachedSeparation.clone();
         double length = separation.length();
         if (length < 1.0E-6) {
             return;
@@ -146,21 +145,16 @@ final class FlightController {
         Vector velocity = MovementMath.steer(
                 flightVelocity, toTarget, maxSpeed, acceleration);
         flightVelocity = velocity.clone();
-        trackedSpeed = velocity.length();
-        // 位移由传送唯一负责，避免原版速度在下一 tick 再叠加一次。
-        entity.setVelocity(new Vector());
+        // 由原版实体移动负责位移，避免每 tick 触发传送和跨区域传送流程。
+        entity.setVelocity(velocity);
         if (velocity.lengthSquared() <= 1.0E-5) {
             return;
         }
-        Location next = entity.getLocation().add(velocity);
+        Location next = entity.getLocation();
         Vector direction = velocity.clone().normalize();
         next.setDirection(direction);
         next.setPitch(Math.max(-55.0F, Math.min(55.0F, next.getPitch())));
-        if (PlatformScheduler.isFolia()) {
-            entity.teleportAsync(next);
-        } else {
-            entity.teleport(next);
-        }
+        entity.setRotation(next.getYaw(), next.getPitch());
         ModelAttachment current = attachment.get();
         if (current != null && current.isValid()) {
             current.updateLocation(next);
