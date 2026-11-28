@@ -1,3 +1,16 @@
 /target/
 /.idea/
 *.iml
+
+# Local build/cache/credentials are not source snapshots
+**/build/
+**/.gradle/
+**/target/
+**/node_modules/
+**/__pycache__/
+*.log
+*.db
+*.sqlite*
+.env
+.env.*
+.mcp.json
